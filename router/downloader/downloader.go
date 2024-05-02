@@ -196,7 +196,9 @@ func (dl *Download) Execute() error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return errors.New("downloader: got bad response status from endpoint: " + res.Status)
+		if res.StatusCode != StatusFound {
+			return errors.New("downloader: got bad response status from endpoint: " + res.Status)
+		}
 	}
 
 	if res.ContentLength < 1 {
