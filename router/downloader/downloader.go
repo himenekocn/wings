@@ -194,16 +194,24 @@ func (dl *Download) Execute() error {
 	if err != nil {
 		return ErrDownloadFailed
 	}
+	
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		if res.StatusCode != http.StatusFound {
-			return errors.New("downloader: got bad response status from endpoint: " + res.Status)
+
+	if res.StatusCode == http.StatusMovedPermanently || res.StatusCode == http.StatusFound {
+		redirect, redirectError := url.Parse(res.Header.Get("Location"))
+		if redirectError != nil {
+			return errors.New("downloader: redirect specified without location")
 		}
+		dl.req.URL = redirect
+		return dl.Execute()
 	}
-	if res.StatusCode != http.StatusFound {
-		if res.ContentLength < 1 {
-			return errors.New("downloader: request is missing ContentLength")
-		}
+	
+	if res.StatusCode != http.StatusOK {
+		return errors.New("downloader: got bad response status from endpoint: " + res.Status)
+	}
+			
+	if res.ContentLength < 1 {
+		return errors.New("downloader: request is missing ContentLength")
 	}
 
 	if dl.req.UseHeader {
