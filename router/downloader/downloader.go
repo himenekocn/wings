@@ -200,9 +200,10 @@ func (dl *Download) Execute() error {
 			return errors.New("downloader: got bad response status from endpoint: " + res.Status)
 		}
 	}
-
-	if res.ContentLength < 1 {
-		return errors.New("downloader: request is missing ContentLength")
+	if res.StatusCode != http.StatusFound {
+		if res.ContentLength < 1 {
+			return errors.New("downloader: request is missing ContentLength")
+		}
 	}
 
 	if dl.req.UseHeader {
