@@ -40,12 +40,7 @@ func (s *Server) Mounts() []environment.Mount {
 		m = append(m, environment.Mount{
 			Source:   filepath.Join(passwd.Directory, "passwd"),
 			Target:   "/etc/passwd",
-			ReadOnly: false,
-		})
-		m = append(m, environment.Mount{
-			Source:   filepath.Join(passwd.Directory, "shadow"),
-			Target:   "/etc/shadow",
-			ReadOnly: false,
+			ReadOnly: true,
 		})
 	}
 
