@@ -12,13 +12,15 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04]
-        go: ["1.21.9", "1.22.2"]
+        go: ["1.22.10", "1.23.4"]
         goos: [linux]
-        goarch: [amd64, arm64]
+        goarch: [amd64]
 
     steps:
       - name: Setup Go
@@ -68,7 +70,7 @@ jobs:
 
       - name: Upload Debug Artifact
         uses: actions/upload-artifact@v4
-        if: ${{ (github.ref == 'refs/heads/develop' || github.event_name == 'pull_request') && matrix.go == '1.21.8' }}
+        if: ${{ (github.ref == 'refs/heads/develop' || github.event_name == 'pull_request') && matrix.go == '1.22.10' }}
         with:
           name: wings_linux_${{ matrix.goarch }}_debug
           path: dist/wings_debug

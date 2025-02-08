@@ -12,9 +12,10 @@ import (
 	"emperror.dev/errors"
 	"github.com/apex/log"
 	"github.com/buger/jsonparser"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 
 	"github.com/pterodactyl/wings/config"
@@ -49,7 +50,7 @@ func (e *Environment) Attach(ctx context.Context) error {
 		return nil
 	}
 
-	opts := types.ContainerAttachOptions{
+	opts := container.AttachOptions{
 		Stdin:  true,
 		Stdout: true,
 		Stderr: true,
@@ -199,14 +200,15 @@ func (e *Environment) Create() error {
 		networkName := "ip-" + strings.ReplaceAll(strings.ReplaceAll(a.DefaultMapping.Ip, ".", "-"), ":", "-")
 		networkMode = container.NetworkMode(networkName)
 
-		if _, err := e.client.NetworkInspect(ctx, networkName, types.NetworkInspectOptions{}); err != nil {
+		if _, err := e.client.NetworkInspect(ctx, networkName, network.InspectOptions{}); err != nil {
 			if !client.IsErrNotFound(err) {
 				return err
 			}
 
-			if _, err := e.client.NetworkCreate(ctx, networkName, types.NetworkCreate{
+			enableIPv6 := false
+			if _, err := e.client.NetworkCreate(ctx, networkName, network.CreateOptions{
 				Driver:     "bridge",
-				EnableIPv6: false,
+				EnableIPv6: &enableIPv6,
 				Internal:   false,
 				Attachable: false,
 				Ingress:    false,
@@ -249,9 +251,12 @@ func (e *Environment) Create() error {
 
 		SecurityOpt:    []string{"no-new-privileges"},
 		ReadonlyRootfs: true,
+		CapAdd: []string{
+			"net_admin",
+		},
 		CapDrop: []string{
 			"setpcap", "mknod", "audit_write", "net_raw", "dac_override",
-			"fowner", "fsetid", "net_bind_service", "sys_chroot", "setfcap", "net_admin",
+			"fowner", "fsetid", "net_bind_service", "sys_chroot", "setfcap",
 		},
 		NetworkMode: networkMode,
 		UsernsMode:  container.UsernsMode(cfg.Docker.UsernsMode),
@@ -270,7 +275,7 @@ func (e *Environment) Destroy() error {
 	// We set it to stopping than offline to prevent crash detection from being triggered.
 	e.SetState(environment.ProcessStoppingState)
 
-	err := e.client.ContainerRemove(context.Background(), e.Id, types.ContainerRemoveOptions{
+	err := e.client.ContainerRemove(context.Background(), e.Id, container.RemoveOptions{
 		RemoveVolumes: true,
 		RemoveLinks:   false,
 		Force:         true,
@@ -316,7 +321,7 @@ func (e *Environment) SendCommand(c string) error {
 // is running or not, it will simply try to read the last X bytes of the file
 // and return them.
 func (e *Environment) Readlog(lines int) ([]string, error) {
-	r, err := e.client.ContainerLogs(context.Background(), e.Id, types.ContainerLogsOptions{
+	r, err := e.client.ContainerLogs(context.Background(), e.Id, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       strconv.Itoa(lines),
@@ -343,12 +348,12 @@ func (e *Environment) Readlog(lines int) ([]string, error) {
 // late, and we don't need to block all the servers from booting just because
 // of that. I'd imagine in a lot of cases an outage shouldn't affect users too
 // badly. It'll at least keep existing servers working correctly if anything.
-func (e *Environment) ensureImageExists(image string) error {
+func (e *Environment) ensureImageExists(img string) error {
 	e.Events().Publish(environment.DockerImagePullStarted, "")
 	defer e.Events().Publish(environment.DockerImagePullCompleted, "")
 
 	// Images prefixed with a ~ are local images that we do not need to try and pull.
-	if strings.HasPrefix(image, "~") {
+	if strings.HasPrefix(img, "~") {
 		return nil
 	}
 
@@ -361,7 +366,7 @@ func (e *Environment) ensureImageExists(image string) error {
 	// Get a registry auth configuration from the config.
 	var registryAuth *config.RegistryConfiguration
 	for registry, c := range config.Get().Docker.Registries {
-		if !strings.HasPrefix(image, registry) {
+		if !strings.HasPrefix(img, registry) {
 			continue
 		}
 
@@ -371,7 +376,7 @@ func (e *Environment) ensureImageExists(image string) error {
 	}
 
 	// Get the ImagePullOptions.
-	imagePullOptions := types.ImagePullOptions{All: false}
+	imagePullOptions := image.PullOptions{All: false}
 	if registryAuth != nil {
 		b64, err := registryAuth.Base64()
 		if err != nil {
@@ -382,23 +387,23 @@ func (e *Environment) ensureImageExists(image string) error {
 		imagePullOptions.RegistryAuth = b64
 	}
 
-	out, err := e.client.ImagePull(ctx, image, imagePullOptions)
+	out, err := e.client.ImagePull(ctx, img, imagePullOptions)
 	if err != nil {
-		images, ierr := e.client.ImageList(ctx, types.ImageListOptions{})
+		images, ierr := e.client.ImageList(ctx, image.ListOptions{})
 		if ierr != nil {
 			// Well damn, something has gone really wrong here, just go ahead and abort there
 			// isn't much anything we can do to try and self-recover from this.
 			return errors.Wrap(ierr, "environment/docker: failed to list images")
 		}
 
-		for _, img := range images {
-			for _, t := range img.RepoTags {
-				if t != image {
+		for _, img2 := range images {
+			for _, t := range img2.RepoTags {
+				if t != img {
 					continue
 				}
 
 				log.WithFields(log.Fields{
-					"image":        image,
+					"image":        img,
 					"container_id": e.Id,
 					"err":          err.Error(),
 				}).Warn("unable to pull requested image from remote source, however the image exists locally")
@@ -409,11 +414,11 @@ func (e *Environment) ensureImageExists(image string) error {
 			}
 		}
 
-		return errors.Wrapf(err, "environment/docker: failed to pull \"%s\" image for server", image)
+		return errors.Wrapf(err, "environment/docker: failed to pull \"%s\" image for server", img)
 	}
 	defer out.Close()
 
-	log.WithField("image", image).Debug("pulling docker image... this could take a bit of time")
+	log.WithField("image", img).Debug("pulling docker image... this could take a bit of time")
 
 	// I'm not sure what the best approach here is, but this will block execution until the image
 	// is done being pulled, which is what we need.
@@ -431,21 +436,21 @@ func (e *Environment) ensureImageExists(image string) error {
 		return err
 	}
 
-	log.WithField("image", image).Debug("completed docker image pull")
+	log.WithField("image", img).Debug("completed docker image pull")
 
 	return nil
 }
 
 func (e *Environment) convertMounts() []mount.Mount {
-	var out []mount.Mount
-
-	for _, m := range e.Configuration.Mounts() {
-		out = append(out, mount.Mount{
+	mounts := e.Configuration.Mounts()
+	out := make([]mount.Mount, len(mounts))
+	for i, m := range mounts {
+		out[i] = mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   m.Source,
 			Target:   m.Target,
 			ReadOnly: m.ReadOnly,
-		})
+		}
 	}
 
 	return out

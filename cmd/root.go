@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/NYTimes/logrotate"
@@ -112,6 +111,9 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	if err := config.EnsurePterodactylUser(); err != nil {
 		log.WithField("error", err).Fatal("failed to create pterodactyl system user")
+	}
+	if err := config.ConfigurePasswd(); err != nil {
+		log.WithField("error", err).Fatal("failed to configure container passwd file")
 	}
 	log.WithFields(log.Fields{
 		"username": config.Get().System.Username,
@@ -379,13 +381,14 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 // Reads the configuration from the disk and then sets up the global singleton
 // with all the configuration values.
 func initConfig() {
-	if !strings.HasPrefix(configPath, "/") {
-		d, err := os.Getwd()
+	if !filepath.IsAbs(configPath) {
+		d, err := filepath.Abs(configPath)
 		if err != nil {
-			log2.Fatalf("cmd/root: 无法确定目录: %s", err)
+			log2.Fatalf("cmd/root: 无法确定CONFIG目录: %s", err)
 		}
-		configPath = path.Clean(path.Join(d, configPath))
+		configPath = d
 	}
+
 	err := config.FromFile(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -439,16 +442,16 @@ __ [blue][bold]Pterodactyl[reset] _____/___/_______ _______ ______
 }
 
 func exitWithConfigurationNotice() {
-	fmt.Print(colorstring.Color(`
+	fmt.Printf(colorstring.Color(`
 [_red_][white][bold]错误: 找不到配置文件[reset]
 
 Wings 找不到您的配置文件，因此无法完成其引导过程。
 请确保您已将实例配置文件复制到下面的默认位置。
 
-默认位置: /etc/pterodactyl/config.yml
+默认位置: %s
 
 [yellow]这不是该软件的错误。请不要当成软件错误进行提问，否则问题将被关闭。[reset]
 
-`))
+`), config.DefaultLocation)
 	os.Exit(1)
 }

@@ -79,7 +79,7 @@ func (l Limits) MemoryOverheadMultiplier() float64 {
 }
 
 func (l Limits) BoundedMemoryLimit() int64 {
-	return int64(math.Round(float64(l.MemoryLimit) * l.MemoryOverheadMultiplier() * 1_000_000))
+	return int64(math.Round(float64(l.MemoryLimit) * l.MemoryOverheadMultiplier() * 1024 * 1024))
 }
 
 // ConvertedSwap returns the amount of swap available as a total in bytes. This
@@ -90,7 +90,7 @@ func (l Limits) ConvertedSwap() int64 {
 		return -1
 	}
 
-	return (l.Swap * 1_000_000) + l.BoundedMemoryLimit()
+	return (l.Swap * 1024 * 1024) + l.BoundedMemoryLimit()
 }
 
 // ProcessLimit returns the process limit for a container. This is currently
@@ -105,7 +105,7 @@ func (l Limits) AsContainerResources() container.Resources {
 	pids := l.ProcessLimit()
 	resources := container.Resources{
 		Memory:            l.BoundedMemoryLimit(),
-		MemoryReservation: l.MemoryLimit * 1_000_000,
+		MemoryReservation: l.MemoryLimit * 1024 * 1024,
 		MemorySwap:        l.ConvertedSwap(),
 		BlkioWeight:       l.IoWeight,
 		OomKillDisable:    &l.OOMDisabled,

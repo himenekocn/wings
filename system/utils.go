@@ -1,6 +1,7 @@
 package system
 
 import (
+	"encoding/json"
 	"bufio"
 	"bytes"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"sync"
 
 	"emperror.dev/errors"
-	"github.com/goccy/go-json"
 )
 
 var (
