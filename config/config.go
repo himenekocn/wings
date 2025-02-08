@@ -519,7 +519,7 @@ func ConfigurePasswd() error {
 		`root:x:0:
 container:x:%d:
 nogroup:x:65534:`,
-		_config.System.User.Gid,
+		_config.System.User.Rootless.ContainerGID,
 	))
 	if err := os.WriteFile(filepath.Join(passwd.Directory, "group"), v, 0o644); err != nil {
 		return fmt.Errorf("failed to write file to %s/group: %v", passwd.Directory, err)
@@ -529,8 +529,8 @@ nogroup:x:65534:`,
 container:x:%d:%d::/home/container:/bin/sh
 nobody:x:65534:65534::/var/empty:/bin/sh
 `,
-		_config.System.User.Uid,
-		_config.System.User.Gid,
+		_config.System.User.Rootless.ContainerUID,
+		_config.System.User.Rootless.ContainerGID,
 	))
 	if err := os.WriteFile(filepath.Join(passwd.Directory, "passwd"), v, 0o644); err != nil {
 		return fmt.Errorf("failed to write file to %s/passwd: %v", passwd.Directory, err)
