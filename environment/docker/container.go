@@ -250,8 +250,8 @@ func (e *Environment) Create() error {
 		LogConfig: cfg.Docker.ContainerLogConfig(),
 
 		//SecurityOpt:    []string{"no-new-privileges"},
-		SecurityOpt:    []string{"privileged"},
-	
+		//SecurityOpt:    []string{"privileged"},
+		Privileged:     true,
 		ReadonlyRootfs: true,
 		CapAdd: []string{
 			"net_admin",
