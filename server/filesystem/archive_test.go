@@ -60,7 +60,7 @@ func TestArchive_Stream(t *testing.T) {
 			g.Assert(err).IsNil()
 
 			// Open the archive.
-			genericFs, err := ArchiveFS.FileSystem(context.Background(), archivePath, nil)
+			genericFs, err := archives.FileSystem(context.Background(), archivePath, nil)
 			g.Assert(err).IsNil()
 
 			// Assert that we are opening an archive.
