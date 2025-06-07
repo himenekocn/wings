@@ -52,6 +52,11 @@ func (s *Server) Mounts() []environment.Mount {
 			Target:   "/run/sudo",
 			ReadOnly: false,
 		})
+		m = append(m, environment.Mount{
+			Source:   filepath.Join(passwd.Directory, "hosts"),
+			Target:   "/etc/hosts",
+			ReadOnly: true,
+		})
 	}
 
 	// Also include any of this server's custom mounts when returning them.
