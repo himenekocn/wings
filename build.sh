@@ -1,0 +1,1 @@
+GOARCH=amd64 /usr/lib/go-1.23/bin/go build -o dist/wings_linux_amd64 -v -trimpath -ldflags="-s -w -X github.com/pterodactyl/wings/system.Version=${REF:11}" github.com/pterodactyl/wings
