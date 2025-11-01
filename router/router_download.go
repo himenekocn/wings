@@ -3,6 +3,7 @@ package router
 import (
 	"bufio"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/system"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/router/tokens"
 	"github.com/pterodactyl/wings/server/backup"
@@ -69,7 +72,9 @@ func getDownloadBackup(c *gin.Context) {
 	c.Header("Content-Disposition", "attachment; filename="+strconv.Quote(st.Name()))
 	c.Header("Content-Type", "application/octet-stream")
 
-	_, _ = bufio.NewReader(f).WriteTo(c.Writer)
+	config := config.Get()
+	reader := system.NewRateLimitReader(bufio.NewReader(f), config.System.Transfers.DownloadLimit)
+	_, _ = io.Copy(c.Writer, reader)
 }
 
 // Handles downloading a specific file for a server.
@@ -106,5 +111,7 @@ func getDownloadFile(c *gin.Context) {
 	c.Header("Content-Disposition", "attachment; filename="+strconv.Quote(st.Name()))
 	c.Header("Content-Type", "application/octet-stream")
 
-	_, _ = bufio.NewReader(f).WriteTo(c.Writer)
+	config := config.Get()
+	reader := system.NewRateLimitReader(bufio.NewReader(f), config.System.Transfers.DownloadLimit)
+	_, _ = io.Copy(c.Writer, reader)
 }
