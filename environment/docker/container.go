@@ -155,7 +155,7 @@ func (e *Environment) Create() error {
 	// container anyways.
 	if _, err := e.ContainerInspect(ctx); err == nil {
 		return nil
-	} else if isNotFoundError(err) {
+	} else if !isNotFoundError(err) {
 		return errors.WrapIf(err, "environment/docker: failed to inspect container")
 	}
 
