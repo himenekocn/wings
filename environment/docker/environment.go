@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"emperror.dev/errors"
@@ -117,11 +118,11 @@ func (e *Environment) Events() *events.Bus {
 func (e *Environment) Exists() (bool, error) {
 	_, err := e.ContainerInspect(context.Background())
 	if err != nil {
-		// If this error is because the container instance wasn't found via Docker we
-		// can safely ignore the error and just return false.
-		if client.IsErrNotFound(err) {
-			return false, nil
-		}
+	// If this error is because the container instance wasn't found via Docker we
+	// can safely ignore the error and just return false.
+	if isNotFoundError(err) {
+		return false, nil
+	}
 		return false, err
 	}
 	return true, nil
@@ -158,7 +159,7 @@ func (e *Environment) ExitState() (uint32, bool, error) {
 		// so that's a mystery that will have to go unsolved.
 		//
 		// @see https://github.com/pterodactyl/panel/issues/2003
-		if client.IsErrNotFound(err) {
+		if isNotFoundError(err) {
 			return 1, false, nil
 		}
 		return 0, false, errors.WrapIf(err, "environment/docker: 无法检查容器")
@@ -217,4 +218,21 @@ func (e *Environment) SetLogCallback(f func([]byte)) {
 	defer e.logCallbackMx.Unlock()
 
 	e.logCallback = f
+}
+
+// GetEnvironmentVariable returns the value of a specific environment variable,
+// or empty string if not found.
+func (e *Environment) GetEnvironmentVariable(name string) string {
+	// Get all environment variables from configuration
+	envVars := e.Configuration.EnvironmentVariables()
+	
+	// Look for the requested variable
+	for _, env := range envVars {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 && parts[0] == name {
+			return parts[1]
+		}
+	}
+	
+	return ""
 }

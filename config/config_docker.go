@@ -88,6 +88,12 @@ type DockerConfiguration struct {
 	// remapping disabled
 	UsernsMode string `default:"" json:"userns_mode" yaml:"userns_mode"`
 
+	// InstallationRateLimit controls the network speed limit for installation containers.
+	// This uses the docker-tc labels to limit download speed during server installation.
+	// The value should be in a format understood by docker-tc (e.g., "50mbps", "100mbit").
+	// If empty or not set, no rate limit will be applied to installation containers.
+	InstallationRateLimit string `default:"50mbps" json:"installation_rate_limit" yaml:"installation_rate_limit"`
+
 	LogConfig struct {
 		Type   string            `default:"local" json:"type" yaml:"type"`
 		Config map[string]string `default:"{\"max-size\":\"5m\",\"max-file\":\"1\",\"compress\":\"false\",\"mode\":\"non-blocking\"}" json:"config" yaml:"config"`

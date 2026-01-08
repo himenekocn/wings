@@ -406,13 +406,21 @@ func (ip *InstallationProcess) Execute() (string, error) {
 		Cmd:          []string{ip.Script.Entrypoint, "/mnt/install/install.sh"},
 		Image:        ip.Script.ContainerImage,
 		Env:          ip.Server.GetEnvironmentVariables(),
-		Labels: map[string]string{
-			"Service":       "Pterodactyl",
-			"ContainerType": "server_installer",
-			"ServerUUID":    ip.Server.ID(),
-			"com.docker-tc.enabled": "1",
-			"com.docker-tc.limit": "50mbps",
-		},
+		Labels: func() map[string]string {
+			labels := map[string]string{
+				"Service":       "Pterodactyl",
+				"ContainerType": "server_installer",
+				"ServerUUID":    ip.Server.ID(),
+			}
+			
+			// Add docker-tc rate limiting if configured
+			if rateLimit := config.Get().Docker.InstallationRateLimit; rateLimit != "" {
+				labels["com.docker-tc.enabled"] = "1"
+				labels["com.docker-tc.limit"] = rateLimit
+			}
+			
+			return labels
+		}(),
 	}
 
 	cfg := config.Get()

@@ -37,6 +37,7 @@
 
 # The built executable
 wings
+wings_o
 wings.exe
 
 # IDE/Editor files (VS Code)

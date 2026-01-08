@@ -16,7 +16,6 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
@@ -24,6 +23,19 @@ import (
 )
 
 var ErrNotAttached = errors.Sentinel("not attached to instance")
+
+// isNotFoundError checks if an error is a "not found" error from Docker
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	// Check for different types of not found errors
+	errStr := err.Error()
+	return strings.Contains(errStr, "No such container") ||
+		strings.Contains(errStr, "not found") ||
+		strings.Contains(errStr, "404")
+}
 
 // A custom console writer that allows us to keep a function blocked until the
 // given stream is properly closed. This does nothing special, only exists to
@@ -108,16 +120,16 @@ func (e *Environment) InSituUpdate() error {
 	defer cancel()
 
 	if _, err := e.ContainerInspect(ctx); err != nil {
-		// If the container doesn't exist for some reason there really isn't anything
-		// we can do to fix that in this process (it doesn't make sense at least). In those
-		// cases just return without doing anything since we still want to save the configuration
-		// to the disk.
-		//
-		// We'll let a boot process make modifications to the container if needed at this point.
-		if client.IsErrNotFound(err) {
-			return nil
-		}
-		return errors.Wrap(err, "environment/docker: could not inspect container")
+	// If the container doesn't exist for some reason there really isn't anything
+	// we can do to fix that in this process (it doesn't make sense at least). In those
+	// cases just return without doing anything since we still want to save the configuration
+	// to the disk.
+	//
+	// We'll let a boot process make modifications to the container if needed at this point.
+	if isNotFoundError(err) {
+		return nil
+	}
+	return errors.Wrap(err, "environment/docker: could not inspect container")
 	}
 
 	// CPU pinning cannot be removed once it is applied to a container. The same is true
@@ -143,7 +155,7 @@ func (e *Environment) Create() error {
 	// container anyways.
 	if _, err := e.ContainerInspect(ctx); err == nil {
 		return nil
-	} else if !client.IsErrNotFound(err) {
+	} else if isNotFoundError(err) {
 		return errors.WrapIf(err, "environment/docker: failed to inspect container")
 	}
 
@@ -174,7 +186,13 @@ func (e *Environment) Create() error {
 	labels["ContainerType"] = "server_process"
 	labels["ServerUUID"] = e.Id
 	labels["com.docker-tc.enabled"] = "1"
-	labels["com.docker-tc.limit"] = "50mbps"
+	
+	// Use DOWNLOAD_LIMIT environment variable for download speed if available, otherwise default to 50mbps
+	downloadLimit := "50mbps"
+	if dl := e.GetEnvironmentVariable("DOWNLOAD_LIMIT"); dl != "" {
+		downloadLimit = dl
+	}
+	labels["com.docker-tc.limit"] = downloadLimit
 
 	conf := &container.Config{
 		Hostname:     e.Id,
@@ -204,7 +222,7 @@ func (e *Environment) Create() error {
 		networkMode = container.NetworkMode(networkName)
 
 		if _, err := e.client.NetworkInspect(ctx, networkName, network.InspectOptions{}); err != nil {
-			if !client.IsErrNotFound(err) {
+			if !isNotFoundError(err) {
 				return err
 			}
 
@@ -292,7 +310,7 @@ func (e *Environment) Destroy() error {
 	// exist on the system. We're just a step ahead of ourselves in that case.
 	//
 	// @see https://github.com/pterodactyl/panel/issues/2001
-	if err != nil && client.IsErrNotFound(err) {
+	if err != nil && isNotFoundError(err) {
 		return nil
 	}
 
