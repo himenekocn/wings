@@ -218,10 +218,10 @@ func (ip *InstallationProcess) tempDir() string {
 func (ip *InstallationProcess) writeScriptToDisk() error {
 	// Make sure the temp directory root exists before trying to make a directory within it. The
 	// os.TempDir call expects this base to exist, it won't create it for you.
-	if err := os.MkdirAll(ip.tempDir(), 0o700); err != nil {
+	if err := os.MkdirAll(ip.tempDir(), 0o777); err != nil {
 		return errors.WithMessage(err, "could not create temporary directory for install process")
 	}
-	f, err := os.OpenFile(filepath.Join(ip.tempDir(), "install.sh"), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(filepath.Join(ip.tempDir(), "install.sh"), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o777)
 	if err != nil {
 		return errors.WithMessage(err, "failed to write server installation script to disk before mount")
 	}
@@ -410,6 +410,8 @@ func (ip *InstallationProcess) Execute() (string, error) {
 			"Service":       "Pterodactyl",
 			"ContainerType": "server_installer",
 			"ServerUUID":    ip.Server.ID(),
+			"com.docker-tc.enabled": "1",
+			"com.docker-tc.limit": "50mbps",
 		},
 	}
 
@@ -428,6 +430,12 @@ func (ip *InstallationProcess) Execute() (string, error) {
 				Source:   ip.tempDir(),
 				Type:     mount.TypeBind,
 				ReadOnly: false,
+			},
+			{
+				Target:   "/home/ser",
+				Source:   "/home/ser",
+				Type:     mount.TypeBind,
+				ReadOnly: true,
 			},
 		},
 		Resources: ip.resourceLimits(),

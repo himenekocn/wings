@@ -173,6 +173,8 @@ func (e *Environment) Create() error {
 	labels["Service"] = "Pterodactyl"
 	labels["ContainerType"] = "server_process"
 	labels["ServerUUID"] = e.Id
+	labels["com.docker-tc.enabled"] = "1"
+	labels["com.docker-tc.limit"] = "50mbps"
 
 	conf := &container.Config{
 		Hostname:     e.Id,

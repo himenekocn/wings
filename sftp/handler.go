@@ -15,6 +15,7 @@ import (
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/filesystem"
+	"github.com/pterodactyl/wings/system"
 )
 
 const (
@@ -71,68 +72,144 @@ func (h *Handler) Handlers() sftp.Handlers {
 
 // Fileread creates a reader for a file on the system and returns the reader back.
 func (h *Handler) Fileread(request *sftp.Request) (io.ReaderAt, error) {
+	logger := h.logger.WithField("filepath", request.Filepath)
+	
 	// Check first if the user can actually open and view a file. This permission is named
 	// really poorly, but it is checking if they can read. There is an addition permission,
 	// "save-files" which determines if they can write that file.
 	if !h.can(PermissionFileReadContent) {
+		logger.Warn("permission denied for file read")
 		return nil, sftp.ErrSSHFxPermissionDenied
 	}
+	
+	// Check permission first without holding the lock, only lock when accessing the filesystem
+	// This allows concurrent permission checks while only serializing filesystem access
+	var f interface{}
+	var err error
+	
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	f, _, err := h.fs.File(request.Filepath)
+	f, _, err = h.fs.File(request.Filepath)
+	h.mu.Unlock()
+	
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			h.logger.WithField("error", err).Error("error processing readfile request")
+			logger.WithField("error", err).Error("failed to open file for reading")
 			return nil, sftp.ErrSSHFxFailure
 		}
+		logger.Debug("file not found")
 		return nil, sftp.ErrSSHFxNoSuchFile
 	}
-	return f, nil
+	
+	// Try to extract the underlying file from the filesystem
+	// We need to check if the file already implements ReaderAt or we need to create a wrapper
+	var readerAt io.ReaderAt
+	var closer io.Closer
+	
+	// First check if we can get an os.File which implements ReaderAt
+	if osFile, ok := f.(*os.File); ok {
+		readerAt = osFile
+		closer = osFile
+	} else if fileReader, ok := f.(io.Reader); ok {
+		// Check if the file reader also implements ReaderAt
+		if ra, ok := fileReader.(io.ReaderAt); ok {
+			readerAt = ra
+		} else {
+			// We can't use this reader for random access
+			logger.Error("filesystem.File.Reader does not implement io.ReaderAt")
+			return nil, sftp.ErrSSHFxFailure
+		}
+	} else {
+		// Unknown file type, can't proceed
+		logger.Error("filesystem.File does not implement io.Reader")
+		return nil, sftp.ErrSSHFxFailure
+	}
+	
+	// Extract the closer if possible
+	if closer == nil {
+		if c, ok := f.(io.Closer); ok {
+			closer = c
+		}
+	}
+	
+	// Wrap the reader with rate limiting - 1MB/s
+	rateLimitedReader := system.NewRateLimitReaderAt(readerAt, 1)
+	if rateLimitedReader == nil {
+		logger.Error("failed to create rate limited reader")
+		// Close the file since we're returning an error
+		if closer, ok := f.(io.Closer); ok {
+			closer.Close()
+		}
+		return nil, sftp.ErrSSHFxFailure
+	}
+	
+	// Create an SFTP reader that wraps the rate limited reader
+	// Since we passed a ReaderAt to NewRateLimitReader, we can safely use it as a ReaderAt
+	sftpReader := NewSFTPReaderAt(rateLimitedReader)
+	
+	logger.Debug("file reader created successfully")
+	return sftpReader, nil
 }
 
 // Filewrite handles the write actions for a file on the system.
 func (h *Handler) Filewrite(request *sftp.Request) (io.WriterAt, error) {
 	if h.ro {
+		h.logger.WithField("filepath", request.Filepath).Warn("attempted write on read-only server")
 		return nil, sftp.ErrSSHFxOpUnsupported
 	}
-	l := h.logger.WithField("source", request.Filepath)
+	
+	logger := h.logger.WithField("filepath", request.Filepath).WithField("flags", request.Flags)
+	
 	// If the user doesn't have enough space left on the server it should respond with an
 	// error since we won't be letting them write this file to the disk.
 	if !h.fs.HasSpaceAvailable(true) {
+		logger.Warn("disk quota exceeded for file write")
 		return nil, ErrSSHQuotaExceeded
 	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	
 	// The specific permission required to perform this action. If the file exists on the
 	// system already it only needs to be an update, otherwise we'll check for a create.
 	permission := PermissionFileUpdate
 	_, sterr := h.fs.Stat(request.Filepath)
 	if sterr != nil {
 		if !errors.Is(sterr, os.ErrNotExist) {
-			l.WithField("error", sterr).Error("error while getting file reader")
+			logger.WithField("error", sterr).Error("failed to stat file before write")
 			return nil, sftp.ErrSSHFxFailure
 		}
 		permission = PermissionFileCreate
+		logger.Debug("file does not exist, will create")
 	}
+	
 	// Confirm the user has permission to perform this action BEFORE calling Touch, otherwise
 	// you'll potentially create a file on the system and then fail out because of user
 	// permission checking after the fact.
 	if !h.can(permission) {
+		logger.WithField("permission", permission).Warn("permission denied for file write")
 		return nil, sftp.ErrSSHFxPermissionDenied
 	}
+	
 	f, err := h.fs.Touch(request.Filepath, os.O_RDWR|os.O_TRUNC)
 	if err != nil {
-		l.WithField("flags", request.Flags).WithField("error", err).Error("failed to open existing file on system")
+		logger.WithField("error", err).Error("failed to touch file for writing")
 		return nil, sftp.ErrSSHFxFailure
 	}
+	
 	// Chown may or may not have been called in the touch function, so always do
 	// it at this point to avoid the file being improperly owned.
-	_ = h.fs.Chown(request.Filepath)
+	if err := h.fs.Chown(request.Filepath); err != nil {
+		logger.WithField("error", err).Warn("failed to chown file after creation")
+	}
+	
 	event := server.ActivitySftpWrite
 	if permission == PermissionFileCreate {
 		event = server.ActivitySftpCreate
+		logger.Debug("file created successfully")
+	} else {
+		logger.Debug("file opened for writing")
 	}
+	
 	h.events.MustLog(event, FileAction{Entity: request.Filepath})
 	return f, nil
 }

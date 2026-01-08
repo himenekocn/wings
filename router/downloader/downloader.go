@@ -197,7 +197,7 @@ func (dl *Download) Execute() error {
 	
 	defer res.Body.Close()
 
-	if res.StatusCode == http.StatusMovedPermanently || res.StatusCode == http.StatusFound {
+	if res.StatusCode == http.StatusMovedPermanently || res.StatusCode == http.StatusFound || res.StatusCode == http.StatusTemporaryRedirect || res.StatusCode == http.StatusPermanentRedirect {
 		redirect, redirectError := url.Parse(res.Header.Get("Location"))
 		if redirectError != nil {
 			return errors.New("downloader: redirect specified without location")
@@ -237,7 +237,7 @@ func (dl *Download) Execute() error {
 
 	p := dl.Path()
 	dl.server.Log().WithField("path", p).Debug("writing remote file to disk")
-
+	
 	// Write the file while tracking the progress, Write will check that the
 	// size of the file won't exceed the disk limit.
 	r := io.TeeReader(res.Body, dl.counter(res.ContentLength))

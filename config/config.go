@@ -485,8 +485,8 @@ func EnsurePterodactylUser() error {
 			return err
 		}
 		_config.System.Username = u.Username
-		_config.System.User.Uid = system.MustInt(u.Uid)
-		_config.System.User.Gid = system.MustInt(u.Gid)
+		_config.System.User.Uid = _config.System.User.Rootless.ContainerUID
+		_config.System.User.Gid = _config.System.User.Rootless.ContainerGID
 		return nil
 	}
 

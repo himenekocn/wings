@@ -12,6 +12,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"emperror.dev/errors"
 	"github.com/apex/log"
@@ -24,6 +27,16 @@ import (
 	"github.com/pterodactyl/wings/server"
 )
 
+const (
+	// Default configuration values
+	DefaultMaxConnections      = 50
+	DefaultConnectionTimeout   = 10 * 60 // seconds
+	DefaultMaxConnectionsLimit = 500
+	DefaultMaxTimeout          = 30 * 60 // seconds (5 minutes)
+	DefaultPort                = 22
+	DefaultAddress             = "0.0.0.0"
+)
+
 // Usernames all follow the same format, so don't even bother hitting the API if the username is not
 // at least in the expected format. This is very basic protection against random bots finding the SFTP
 // server and sending a flood of usernames.
@@ -31,19 +44,61 @@ var validUsernameRegexp = regexp.MustCompile(`^(?i)(.+)\.([a-z0-9]{8})$`)
 
 //goland:noinspection GoNameStartsWithPackageName
 type SFTPServer struct {
-	manager  *server.Manager
-	BasePath string
-	ReadOnly bool
-	Listen   string
+	manager      *server.Manager
+	BasePath     string
+	ReadOnly     bool
+	Listen       string
+	maxConns     int32
+	activeConns  int32
+	connTimeout  time.Duration
+	shutdownChan chan struct{}
+	shutdownOnce sync.Once
 }
 
 func New(m *server.Manager) *SFTPServer {
 	cfg := config.Get().System
+
+	// Use default configuration values for now
+	// In the future, these could be configurable via config file
+	maxConns := int32(DefaultMaxConnections)
+	connTimeout := time.Duration(DefaultConnectionTimeout) * time.Second
+
+	address := cfg.Sftp.Address
+	if address == "" {
+		address = DefaultAddress
+		log.Info("SFTP address not configured, using default")
+	}
+
+	port := cfg.Sftp.Port
+	if port <= 0 || port > 65535 {
+		port = DefaultPort
+		log.WithField("port", port).Warn("SFTP port out of range, using default")
+	}
+
+	listenAddr := address + ":" + strconv.Itoa(port)
+
+	// Validate base path
+	if cfg.Data == "" {
+		log.Warn("SFTP base path not configured, using current directory")
+		cfg.Data = "."
+	}
+
+	log.WithFields(log.Fields{
+		"address":         address,
+		"port":            port,
+		"max_connections": maxConns,
+		"timeout_seconds": connTimeout.Seconds(),
+		"read_only":       cfg.Sftp.ReadOnly,
+	}).Info("SFTP server configuration")
+
 	return &SFTPServer{
-		manager:  m,
-		BasePath: cfg.Data,
-		ReadOnly: cfg.Sftp.ReadOnly,
-		Listen:   cfg.Sftp.Address + ":" + strconv.Itoa(cfg.Sftp.Port),
+		manager:      m,
+		BasePath:     cfg.Data,
+		ReadOnly:     cfg.Sftp.ReadOnly,
+		Listen:       listenAddr,
+		maxConns:     maxConns,
+		connTimeout:  connTimeout,
+		shutdownChan: make(chan struct{}),
 	}
 }
 
@@ -85,6 +140,7 @@ func (c *SFTPServer) Run() error {
 		},
 		NoClientAuth: false,
 		MaxAuthTries: 6,
+		// Note: ConnectionTimeout is handled via SetDeadline on the net.Conn
 		PasswordCallback: func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 			return c.makeCredentialsRequest(conn, remote.SftpAuthPassword, string(password))
 		},
@@ -103,9 +159,44 @@ func (c *SFTPServer) Run() error {
 	log.WithField("listen", c.Listen).WithField("public_key", strings.Trim(public, "\n")).Info("sftp server listening for connections")
 
 	for {
-		if conn, _ := listener.Accept(); conn != nil {
+		select {
+		case <-c.shutdownChan:
+			log.Info("sftp server shutting down")
+			return nil
+		default:
+			// Set accept timeout to allow checking shutdown signal
+			if tcpListener, ok := listener.(*net.TCPListener); ok {
+				tcpListener.SetDeadline(time.Now().Add(1 * time.Second))
+			}
+
+			conn, err := listener.Accept()
+			if err != nil {
+				// Check if it's a timeout error (expected for shutdown check)
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue
+				}
+				log.WithField("error", err).Error("sftp: error accepting connection")
+				continue
+			}
+
+			// Check connection limit
+			if atomic.LoadInt32(&c.activeConns) >= c.maxConns {
+				log.WithField("ip", conn.RemoteAddr().String()).Warn("sftp: connection limit reached, rejecting new connection")
+				conn.Close()
+				continue
+			}
+
+			atomic.AddInt32(&c.activeConns, 1)
 			go func(conn net.Conn) {
-				defer conn.Close()
+				defer func() {
+					conn.Close()
+					atomic.AddInt32(&c.activeConns, -1)
+				}()
+
+				// Set read/write deadlines on the connection
+				conn.SetReadDeadline(time.Now().Add(c.connTimeout))
+				conn.SetWriteDeadline(time.Now().Add(c.connTimeout))
+
 				if err := c.AcceptInbound(conn, conf); err != nil {
 					log.WithField("error", err).WithField("ip", conn.RemoteAddr().String()).Error("sftp: failed to accept inbound connection")
 				}
@@ -215,7 +306,14 @@ func (c *SFTPServer) makeCredentialsRequest(conn ssh.ConnMetadata, t remote.Sftp
 		ClientVersion: conn.ClientVersion(),
 	}
 
-	logger := log.WithFields(log.Fields{"subsystem": "sftp", "method": request.Type, "username": request.User, "ip": request.IP})
+	logger := log.WithFields(log.Fields{
+		"subsystem":  "sftp",
+		"method":     request.Type,
+		"username":   request.User,
+		"ip":         request.IP,
+		"session_id": request.SessionID,
+	})
+
 	logger.Debug("validating credentials for SFTP connection")
 
 	if !validUsernameRegexp.MatchString(request.User) {
@@ -223,17 +321,27 @@ func (c *SFTPServer) makeCredentialsRequest(conn ssh.ConnMetadata, t remote.Sftp
 		return nil, &remote.SftpInvalidCredentialsError{}
 	}
 
-	resp, err := c.manager.Client().ValidateSftpCredentials(context.Background(), request)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := c.manager.Client().ValidateSftpCredentials(ctx, request)
 	if err != nil {
 		if _, ok := err.(*remote.SftpInvalidCredentialsError); ok {
 			logger.Warn("failed to validate user credentials (invalid username or password)")
+		} else if ctx.Err() == context.DeadlineExceeded {
+			logger.Warn("authentication request timed out")
 		} else {
 			logger.WithField("error", err).Error("encountered an error while trying to validate user credentials")
 		}
 		return nil, err
 	}
 
-	logger.WithField("server", resp.Server).Debug("credentials validated and matched to server instance")
+	logger.WithFields(log.Fields{
+		"server":            resp.Server,
+		"user_uuid":         resp.User,
+		"permissions_count": len(resp.Permissions),
+	}).Debug("credentials validated and matched to server instance")
+
 	permissions := ssh.Permissions{
 		Extensions: map[string]string{
 			"ip":          conn.RemoteAddr().String(),
@@ -244,6 +352,13 @@ func (c *SFTPServer) makeCredentialsRequest(conn ssh.ConnMetadata, t remote.Sftp
 	}
 
 	return &permissions, nil
+}
+
+// Shutdown gracefully shuts down the SFTP server
+func (c *SFTPServer) Shutdown() {
+	c.shutdownOnce.Do(func() {
+		close(c.shutdownChan)
+	})
 }
 
 // PrivateKeyPath returns the path the host private key for this server instance.
