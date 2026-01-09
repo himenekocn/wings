@@ -426,26 +426,34 @@ func (ip *InstallationProcess) Execute() (string, error) {
 	cfg := config.Get()
 	tmpfsSize := strconv.Itoa(int(cfg.Docker.TmpfsSize))
 	hostConf := &container.HostConfig{
-		Mounts: []mount.Mount{
-			{
-				Target:   "/mnt/server",
-				Source:   ip.Server.Filesystem().Path(),
-				Type:     mount.TypeBind,
-				ReadOnly: false,
-			},
-			{
-				Target:   "/mnt/install",
-				Source:   ip.tempDir(),
-				Type:     mount.TypeBind,
-				ReadOnly: false,
-			},
-			{
-				Target:   "/home/ser",
-				Source:   "/home/ser",
-				Type:     mount.TypeBind,
-				ReadOnly: true,
-			},
-		},
+		Mounts: func() []mount.Mount {
+			mounts := []mount.Mount{
+				{
+					Target:   "/mnt/server",
+					Source:   ip.Server.Filesystem().Path(),
+					Type:     mount.TypeBind,
+					ReadOnly: false,
+				},
+				{
+					Target:   "/mnt/install",
+					Source:   ip.tempDir(),
+					Type:     mount.TypeBind,
+					ReadOnly: false,
+				},
+			}
+			
+			// Only mount /home/ser if it exists on the host
+			if _, err := os.Stat("/home/ser"); err == nil {
+				mounts = append(mounts, mount.Mount{
+					Target:   "/home/ser",
+					Source:   "/home/ser",
+					Type:     mount.TypeBind,
+					ReadOnly: true,
+				})
+			}
+			
+			return mounts
+		}(),
 		Resources: ip.resourceLimits(),
 		Tmpfs: map[string]string{
 			"/tmp": "rw,exec,nosuid,size=" + tmpfsSize + "M",
