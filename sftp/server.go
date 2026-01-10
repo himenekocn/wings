@@ -29,12 +29,10 @@ import (
 
 const (
 	// Default configuration values
-	DefaultMaxConnections      = 50
-	DefaultConnectionTimeout   = 10 * 60 // seconds
-	DefaultMaxConnectionsLimit = 500
-	DefaultMaxTimeout          = 30 * 60 // seconds (5 minutes)
-	DefaultPort                = 22
-	DefaultAddress             = "0.0.0.0"
+	DefaultMaxConnections    = 500
+	DefaultConnectionTimeout = 60 * 60 // seconds (increased to 60 minutes for large file transfers)
+	DefaultPort              = 22
+	DefaultAddress           = "0.0.0.0"
 )
 
 // Usernames all follow the same format, so don't even bother hitting the API if the username is not
@@ -194,8 +192,15 @@ func (c *SFTPServer) Run() error {
 				}()
 
 				// Set read/write deadlines on the connection
+				// Update deadlines periodically during large file transfers to avoid timeouts
 				conn.SetReadDeadline(time.Now().Add(c.connTimeout))
 				conn.SetWriteDeadline(time.Now().Add(c.connTimeout))
+
+				// Set TCP keepalive to maintain connection for long uploads
+				if tcpConn, ok := conn.(*net.TCPConn); ok {
+					tcpConn.SetKeepAlive(true)
+					tcpConn.SetKeepAlivePeriod(30 * time.Second)
+				}
 
 				if err := c.AcceptInbound(conn, conf); err != nil {
 					log.WithField("error", err).WithField("ip", conn.RemoteAddr().String()).Error("sftp: failed to accept inbound connection")

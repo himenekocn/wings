@@ -142,7 +142,8 @@ func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
 
 	// Create a new gzip writer around the file.
 	gw, _ := pgzip.NewWriterLevel(w, compressionLevel)
-	_ = gw.SetConcurrency(1<<20, 1)
+	// Increase buffer size and goroutines for better performance with large files
+	_ = gw.SetConcurrency(4<<20, 4)  // 4MB buffer, 4 goroutines
 	defer gw.Close()
 
 	// Create a new tar writer around the gzip writer.
@@ -151,7 +152,7 @@ func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
 
 	a.w = NewTarProgress(tw, a.Progress)
 
-	fs := a.Filesystem.unixFS
+	fs := a.Filesystem.unixFS.UnixFS
 
 	// If we're specifically looking for only certain files, or have requested
 	// that certain files be ignored we'll update the callback function to reflect
@@ -327,7 +328,7 @@ func (a *Archive) addToArchive(dirfd int, name, relative string, entry ufs.DirEn
 	}
 
 	// Open the file.
-	f, err := a.Filesystem.unixFS.OpenFileat(dirfd, name, ufs.O_RDONLY, 0)
+	f, err := a.Filesystem.unixFS.UnixFS.OpenFileat(dirfd, name, ufs.O_RDONLY, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
