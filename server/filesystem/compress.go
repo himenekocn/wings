@@ -10,10 +10,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"emperror.dev/errors"
-	"github.com/klauspost/compress/zip"
 	"github.com/mholt/archives"
+	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/pterodactyl/wings/internal/ufs"
 	"github.com/pterodactyl/wings/server/filesystem/archiverext"
@@ -79,11 +80,10 @@ func (fs *Filesystem) archiverFileSystem(ctx context.Context, p string) (iofs.FS
 	if format != nil {
 		switch ff := format.(type) {
 		case archives.Zip:
-			// zip.Reader is more performant than ArchiveFS, because zip.Reader caches content information
-			// and zip.Reader can open several content files concurrently because of io.ReaderAt requirement
-			// while ArchiveFS can't.
-			// zip.Reader doesn't suffer from issue #330 and #310 according to local test (but they should be fixed anyway)
-			return zip.NewReader(f, info.Size())
+			// Use our custom ZipFS wrapper that handles GBK-encoded filenames
+			// This is more performant than ArchiveFS, because it caches content information
+			// and can open several content files concurrently because of io.ReaderAt requirement.
+			return archiverext.NewZipFS(f, info.Size())
 		case archives.Extraction:
 			return &archives.ArchiveFS{Stream: io.NewSectionReader(f, 0, info.Size()), Format: ff, Context: ctx}, nil
 		case archives.Compression:
@@ -96,6 +96,8 @@ func (fs *Filesystem) archiverFileSystem(ctx context.Context, p string) (iofs.FS
 
 // SpaceAvailableForDecompression looks through a given archive and determines
 // if decompressing it would put the server over its allocated disk space limit.
+// To avoid long delays on large archives, this function will timeout after 5 seconds
+// and allow decompression to proceed (space will still be checked incrementally during extraction).
 func (fs *Filesystem) SpaceAvailableForDecompression(ctx context.Context, dir string, file string) error {
 	// Don't waste time trying to determine this if we know the server will have the space for
 	// it since there is no limit.
@@ -111,16 +113,27 @@ func (fs *Filesystem) SpaceAvailableForDecompression(ctx context.Context, dir st
 		return err
 	}
 
+	// Close the filesystem after we're done to release file handles
+	if closer, ok := fsys.(io.Closer); ok {
+		defer closer.Close()
+	}
+
+	// Create a context with timeout to prevent long delays on large archives
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	var size atomic.Int64
-	return iofs.WalkDir(fsys, ".", func(path string, d iofs.DirEntry, err error) error {
+	err = iofs.WalkDir(fsys, ".", func(path string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		select {
-		case <-ctx.Done():
-			// Stop walking if the context is canceled.
-			return ctx.Err()
+		case <-timeoutCtx.Done():
+			// Stop walking if the timeout is reached or context is canceled.
+			// We'll check below whether to ignore the error (for timeouts)
+			// or propagate it (for cancellations).
+			return timeoutCtx.Err()
 		default:
 			info, err := d.Info()
 			if err != nil {
@@ -132,6 +145,14 @@ func (fs *Filesystem) SpaceAvailableForDecompression(ctx context.Context, dir st
 			return nil
 		}
 	})
+
+	// If the error is a timeout, ignore it and allow decompression to proceed.
+	// Space will still be checked incrementally during the actual extraction.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+
+	return err
 }
 
 // DecompressFile will decompress a file in a given directory by using the
@@ -188,6 +209,33 @@ type extractStreamOptions struct {
 	Format archives.Format
 	// Reader for the archive.
 	Reader io.Reader
+}
+
+// decodeFilename attempts to decode a filename from an archive, automatically
+// detecting and converting GBK-encoded filenames to UTF-8. This is necessary
+// because many Windows applications in China create ZIP files with GBK-encoded
+// filenames instead of UTF-8.
+//
+// The function uses a simple but effective heuristic:
+// - If the filename is valid UTF-8, return it as-is
+// - If the filename is not valid UTF-8, attempt to decode it as GBK
+// - If GBK decoding fails, return the original filename
+func decodeFilename(filename string) string {
+	// Check if it's already valid UTF-8
+	if utf8.ValidString(filename) {
+		// Valid UTF-8, return as-is
+		return filename
+	}
+
+	// Not valid UTF-8, try to decode as GBK
+	decoded, err := simplifiedchinese.GBK.NewDecoder().String(filename)
+	if err != nil {
+		// GBK decoding failed, return original
+		return filename
+	}
+
+	// Successfully decoded from GBK
+	return decoded
 }
 
 func (fs *Filesystem) extractStream(ctx context.Context, opts extractStreamOptions) error {
@@ -263,7 +311,9 @@ func (fs *Filesystem) extractStream(ctx context.Context, opts extractStreamOptio
 		if f.IsDir() {
 			return nil
 		}
-		p := filepath.Join(opts.Directory, f.NameInArchive)
+		// Decode the filename, converting from GBK to UTF-8 if necessary
+		decodedName := decodeFilename(f.NameInArchive)
+		p := filepath.Join(opts.Directory, decodedName)
 		// If it is ignored, just don't do anything with the file and skip over it.
 		if err := fs.IsIgnored(p); err != nil {
 			return nil
