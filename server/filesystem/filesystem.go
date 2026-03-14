@@ -167,8 +167,19 @@ func (fs *Filesystem) Write(p string, r io.Reader, newSize int64, mode ufs.FileM
 	defer file.Close()
 
 	if newSize == 0 {
-		// Subtract the previous size of the file if the new size is 0.
+		// When newSize is 0, we still need to handle the case where content might
+		// be streamed (e.g., dynamic content with unknown size).
+		// First, subtract the old file size from the quota.
 		fs.unixFS.Add(-currentSize)
+
+		// Copy data without size limit, but track how much is actually written.
+		// This handles cases where Content-Length is 0 but data is still sent.
+		n, err := io.Copy(file, r)
+
+		// Add the actual size written to the quota.
+		if err == nil && n > 0 {
+			fs.unixFS.Add(n)
+		}
 	} else {
 		// Do not use CopyBuffer here, it is wasteful as the file implements
 		// io.ReaderFrom, which causes it to not use the buffer anyways.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"emperror.dev/errors"
+	"github.com/apex/log"
 	"github.com/google/uuid"
 
 	"github.com/pterodactyl/wings/server"
@@ -194,7 +195,7 @@ func (dl *Download) Execute() error {
 	if err != nil {
 		return ErrDownloadFailed
 	}
-	
+
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusMovedPermanently || res.StatusCode == http.StatusFound || res.StatusCode == http.StatusTemporaryRedirect || res.StatusCode == http.StatusPermanentRedirect {
@@ -205,13 +206,19 @@ func (dl *Download) Execute() error {
 		dl.req.URL = redirect
 		return dl.Execute()
 	}
-	
+
 	if res.StatusCode != http.StatusOK {
 		return errors.New("downloader: got bad response status from endpoint: " + res.Status)
 	}
-			
+
+	// Some servers don't provide Content-Length header (e.g., using chunked transfer encoding).
+	// We allow this case but progress tracking will be limited.
+	var contentLength int64
 	if res.ContentLength < 1 {
-		return errors.New("downloader: request is missing ContentLength")
+		// Try to get content length from header directly
+		contentLength = 0
+	} else {
+		contentLength = res.ContentLength
 	}
 
 	if dl.req.UseHeader {
@@ -237,13 +244,71 @@ func (dl *Download) Execute() error {
 
 	p := dl.Path()
 	dl.server.Log().WithField("path", p).Debug("writing remote file to disk")
-	
+
 	// Write the file while tracking the progress, Write will check that the
 	// size of the file won't exceed the disk limit.
-	r := io.TeeReader(res.Body, dl.counter(res.ContentLength))
-	if err := dl.server.Filesystem().Write(p, r, res.ContentLength, 0o644); err != nil {
+	// Use download ID as the tracking ID so API queries can find it
+	progressEvent := &ProgressEvent{
+		ID:        dl.Identifier,
+		FileName:  dl.path,
+		Progress:  0,
+		Bytes:     0,
+		Total:     contentLength,
+		Speed:     0,
+		Status:    "downloading",
+		Timestamp: time.Now().Unix(),
+	}
+
+	progressWriter := NewProgressWriter(contentLength, func(bytes, total int64, speed int64) {
+		if total > 0 {
+			progressEvent.Progress = float64(bytes) / float64(total)
+		} else {
+			// Unknown total, set progress to 0
+			progressEvent.Progress = 0
+		}
+		progressEvent.Bytes = bytes
+		progressEvent.Speed = speed
+		progressEvent.Timestamp = time.Now().Unix()
+		progressTracker.Broadcast(progressEvent)
+
+		// Log progress at 10% intervals (only if we know the total)
+		if total > 0 {
+			progressPercent := int(progressEvent.Progress * 100)
+			if progressPercent%10 == 0 && progressPercent > 0 {
+				log.WithFields(log.Fields{
+					"file":     dl.path,
+					"progress": fmt.Sprintf("%.2f%%", progressEvent.Progress*100),
+					"speed":    formatSpeed(speed),
+				}).Debug("download progress")
+			}
+		}
+	})
+
+	r := io.TeeReader(res.Body, progressWriter)
+	if err := dl.server.Filesystem().Write(p, r, contentLength, 0o644); err != nil {
+		progressEvent.Status = "failed"
+		progressTracker.Broadcast(progressEvent)
+		progressTracker.Remove(dl.Identifier)
 		return errors.WrapIf(err, "downloader: failed to write file to server directory")
 	}
+
+	// Download completed successfully
+	if contentLength > 0 {
+		progressEvent.Progress = 1.0
+		progressEvent.Bytes = contentLength
+	} else {
+		// For unknown size, mark as completed with actual bytes
+		progressEvent.Progress = 1.0
+	}
+	progressEvent.Status = "completed"
+	progressTracker.Broadcast(progressEvent)
+
+	// Clean up progress tracking after a short delay
+	go func() {
+		time.Sleep(5 * time.Second)
+		progressTracker.Remove(dl.Identifier)
+	}()
+
 	return nil
 }
 
@@ -275,6 +340,7 @@ func (dl *Download) Path() string {
 
 // Handles a write event by updating the progress completed percentage and firing off
 // events to the server websocket as needed.
+// Deprecated: Use ProgressWriter instead
 func (dl *Download) counter(contentLength int64) *Counter {
 	onWrite := func(t int) {
 		dl.mu.Lock()
@@ -283,6 +349,26 @@ func (dl *Download) counter(contentLength int64) *Counter {
 	}
 	return &Counter{
 		onWrite: onWrite,
+	}
+}
+
+// formatSpeed formats a speed value in bytes per second to a human-readable format
+func formatSpeed(bytesPerSec int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+
+	switch {
+	case bytesPerSec >= GB:
+		return fmt.Sprintf("%.2f GB/s", float64(bytesPerSec)/GB)
+	case bytesPerSec >= MB:
+		return fmt.Sprintf("%.2f MB/s", float64(bytesPerSec)/MB)
+	case bytesPerSec >= KB:
+		return fmt.Sprintf("%.2f KB/s", float64(bytesPerSec)/KB)
+	default:
+		return fmt.Sprintf("%d B/s", bytesPerSec)
 	}
 }
 
@@ -345,4 +431,19 @@ func mustParseCIDR(ip string) *net.IPNet {
 		panic(fmt.Errorf("downloader: failed to parse CIDR: %s", err))
 	}
 	return block
+}
+
+// GetProgress returns the current progress for a download
+func GetProgress(downloadID string) *ProgressEvent {
+	return progressTracker.GetProgress(downloadID)
+}
+
+// Subscribe subscribes to progress updates for a specific download
+func Subscribe(downloadID string) chan *ProgressEvent {
+	return progressTracker.Subscribe(downloadID)
+}
+
+// Unsubscribe unsubscribes from progress updates
+func Unsubscribe(downloadID string, ch chan *ProgressEvent) {
+	progressTracker.Unsubscribe(downloadID, ch)
 }

@@ -199,6 +199,17 @@ func RemoteDownloadEnabled() gin.HandlerFunc {
 	}
 }
 
+// ExtractServer extracts the server from the request context.
+// Returns nil if the server is not present in the context.
+func ExtractServer(c *gin.Context) *server.Server {
+	if v, ok := c.Get("server"); ok {
+		if s, ok := v.(*server.Server); ok {
+			return s
+		}
+	}
+	return nil
+}
+
 // ExtractLogger pulls the logger out of the request context and returns it. By
 // default this will include the request ID, but may also include the server ID
 // if that middleware has been used in the chain by the time it is called.
@@ -208,16 +219,6 @@ func ExtractLogger(c *gin.Context) *log.Entry {
 		panic("middleware/middleware: cannot extract logger: not present in request context")
 	}
 	return v.(*log.Entry)
-}
-
-// ExtractServer will return the server from the gin.Context or panic if it is
-// not present.
-func ExtractServer(c *gin.Context) *server.Server {
-	v, ok := c.Get("server")
-	if !ok {
-		panic("middleware/middleware: cannot extract server: not present in request context")
-	}
-	return v.(*server.Server)
 }
 
 // ExtractApiClient returns the API client defined for the routes.

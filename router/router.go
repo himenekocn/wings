@@ -101,6 +101,12 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			files.GET("/pull", middleware.RemoteDownloadEnabled(), getServerPullingFiles)
 			files.POST("/pull", middleware.RemoteDownloadEnabled(), postServerPullRemoteFile)
 			files.DELETE("/pull/:download", middleware.RemoteDownloadEnabled(), deleteServerPullRemoteFile)
+
+			// Download progress endpoints
+			files.GET("/download-progress", getDownloadProgress)
+			files.GET("/download-progress/list", listActiveDownloads)
+			files.GET("/download-progress/ws", handleDownloadProgressWebSocket)
+			files.DELETE("/download-progress/:download_id", deleteDownloadProgress)
 		}
 
 		backup := server.Group("/backup")
