@@ -103,7 +103,7 @@ func postTransfers(c *gin.Context) {
 		if err := manager.Client().SetTransferStatus(context.Background(), trnsfr.Server.ID(), successful); err != nil {
 			// Only delete the files if the transfer actually failed, otherwise we could have
 			// unrecoverable data-loss.
-			if !successful && err != nil {
+			if !successful {
 				// Delete all extracted files.
 				go func(trnsfr *transfer.Transfer) {
 					_ = trnsfr.Server.Filesystem().UnixFS().Close()
@@ -114,11 +114,12 @@ func postTransfers(c *gin.Context) {
 			}
 
 			trnsfr.Log().WithField("status", successful).WithError(err).Error("failed to set transfer status on panel")
-			return
 		}
 
 		trnsfr.Server.SetTransferring(false)
-		trnsfr.Server.Events().Publish(server.TransferStatusEvent, "success")
+		if successful {
+			trnsfr.Server.Events().Publish(server.TransferStatusEvent, "success")
+		}
 	}(ctx, trnsfr)
 
 	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
