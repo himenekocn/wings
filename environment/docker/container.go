@@ -30,7 +30,7 @@ func isNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	// Check for different types of not found errors
 	errStr := err.Error()
 	return strings.Contains(errStr, "No such container") ||
@@ -121,16 +121,16 @@ func (e *Environment) InSituUpdate() error {
 	defer cancel()
 
 	if _, err := e.ContainerInspect(ctx); err != nil {
-	// If the container doesn't exist for some reason there really isn't anything
-	// we can do to fix that in this process (it doesn't make sense at least). In those
-	// cases just return without doing anything since we still want to save the configuration
-	// to the disk.
-	//
-	// We'll let a boot process make modifications to the container if needed at this point.
-	if isNotFoundError(err) {
-		return nil
-	}
-	return errors.Wrap(err, "environment/docker: could not inspect container")
+		// If the container doesn't exist for some reason there really isn't anything
+		// we can do to fix that in this process (it doesn't make sense at least). In those
+		// cases just return without doing anything since we still want to save the configuration
+		// to the disk.
+		//
+		// We'll let a boot process make modifications to the container if needed at this point.
+		if isNotFoundError(err) {
+			return nil
+		}
+		return errors.Wrap(err, "environment/docker: could not inspect container")
 	}
 
 	// CPU pinning cannot be removed once it is applied to a container. The same is true
@@ -187,7 +187,7 @@ func (e *Environment) Create() error {
 	labels["ContainerType"] = "server_process"
 	labels["ServerUUID"] = e.Id
 	labels["com.docker-tc.enabled"] = "1"
-	
+
 	// Use DOWNLOAD_LIMIT environment variable for download speed if available, otherwise default to 50mbps
 	downloadLimit := "50mbps"
 	if dl := e.GetEnvironmentVariable("DOWNLOAD_LIMIT"); dl != "" {
