@@ -167,7 +167,7 @@ func (fs *Filesystem) DirectorySize(root string) (int64, error) {
 	}
 
 	var hardLinks []uint64
-	
+
 	var size atomic.Int64
 	err = fs.unixFS.WalkDirat(dirfd, name, func(dirfd int, name, _ string, d ufs.DirEntry, err error) error {
 		if err != nil {

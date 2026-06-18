@@ -1,9 +1,9 @@
 package system
 
 import (
-	"encoding/json"
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"

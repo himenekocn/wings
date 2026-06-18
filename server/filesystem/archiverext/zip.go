@@ -24,7 +24,6 @@ func NewZipFS(r io.ReaderAt, size int64) (*ZipFS, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ZipFS{reader: zr}, nil
 
 	// Keep a reference to the underlying file if it's a Closer
 	var closer io.Closer

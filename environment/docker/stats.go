@@ -95,7 +95,7 @@ func (e *Environment) pollResources(ctx context.Context) error {
 	}
 }
 
-// The "docker stats" CLI call does not return the same value as the types.MemoryStats.Usage
+// The "docker stats" CLI call does not return the same value as the [container.MemoryStats].Usage
 // value which can be rather confusing to people trying to compare panel usage to
 // their stats output.
 //

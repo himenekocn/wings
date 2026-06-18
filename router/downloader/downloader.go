@@ -165,7 +165,7 @@ func ByID(dlid string) *Download {
 }
 
 //goland:noinspection GoVetCopyLock
-func (dl Download) MarshalJSON() ([]byte, error) {
+func (dl *Download) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Identifier string
 		Progress   float64

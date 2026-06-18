@@ -239,11 +239,9 @@ func decodeFilename(filename string) string {
 }
 
 func (fs *Filesystem) extractStream(ctx context.Context, opts extractStreamOptions) error {
-
 	// See if it's a compressed archive, such as TAR or a ZIP
 	ex, ok := opts.Format.(archives.Extractor)
 	if !ok {
-
 		// If not, check if it's a single-file compression, such as
 		// .log.gz, .sql.gz, and so on
 		de, ok := opts.Format.(archives.Decompressor)
@@ -308,14 +306,21 @@ func (fs *Filesystem) extractStream(ctx context.Context, opts extractStreamOptio
 
 	// Decompress and extract archive
 	return ex.Extract(ctx, opts.Reader, func(ctx context.Context, f archives.FileInfo) error {
-		if f.IsDir() {
-			return nil
-		}
-		// Decode the filename, converting from GBK to UTF-8 if necessary
+		// Decode the filename, converting from GBK to UTF-8 if necessary.
 		decodedName := decodeFilename(f.NameInArchive)
 		p := filepath.Join(opts.Directory, decodedName)
-		// If it is ignored, just don't do anything with the file and skip over it.
+
+		// If it is ignored, just don't do anything with the entry and skip over it.
 		if err := fs.IsIgnored(p); err != nil {
+			return nil
+		}
+
+		// Create directories explicitly; an empty one has no file to create it
+		// implicitly and would otherwise be dropped during extraction.
+		if f.IsDir() {
+			if err := fs.unixFS.MkdirAll(p, 0o755); err != nil {
+				return wrapError(err, opts.FileName)
+			}
 			return nil
 		}
 		r, err := f.Open()

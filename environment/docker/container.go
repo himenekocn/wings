@@ -16,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
@@ -116,7 +117,7 @@ func (e *Environment) Attach(ctx context.Context) error {
 // container. This allows memory, cpu, and IO limitations to be adjusted on the
 // fly for individual instances.
 func (e *Environment) InSituUpdate() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if _, err := e.ContainerInspect(ctx); err != nil {
@@ -222,7 +223,7 @@ func (e *Environment) Create() error {
 		networkMode = container.NetworkMode(networkName)
 
 		if _, err := e.client.NetworkInspect(ctx, networkName, network.InspectOptions{}); err != nil {
-			if !isNotFoundError(err) {
+			if !client.IsErrNotFound(err) {
 				return err
 			}
 
@@ -383,7 +384,7 @@ func (e *Environment) ensureImageExists(img string) error {
 	// Give it up to 15 minutes to pull the image. I think this should cover 99.8% of cases where an
 	// image pull might fail. I can't imagine it will ever take more than 15 minutes to fully pull
 	// an image. Let me know when I am inevitably wrong here...
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*15)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	// Get a registry auth configuration from the config.
@@ -475,6 +476,5 @@ func (e *Environment) convertMounts() []mount.Mount {
 			ReadOnly: m.ReadOnly,
 		}
 	}
-
 	return out
 }

@@ -1,5 +1,5 @@
 # Stage 1 (Build)
-FROM golang:1.22.10-alpine AS builder
+FROM golang:1.24.11-alpine AS builder
 
 ARG VERSION
 RUN apk add --update --no-cache git make mailcap
@@ -21,6 +21,7 @@ COPY --from=builder /etc/os-release /etc/os-release
 COPY --from=builder /etc/mime.types /etc/mime.types
 
 COPY --from=builder /app/wings /usr/bin/
+
 ENTRYPOINT ["/usr/bin/wings"]
 CMD ["--config", "/etc/pterodactyl/config.yml"]
 

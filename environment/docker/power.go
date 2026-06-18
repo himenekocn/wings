@@ -9,6 +9,7 @@ import (
 	"emperror.dev/errors"
 	"github.com/apex/log"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 
 	"github.com/pterodactyl/wings/environment"
 	"github.com/pterodactyl/wings/remote"
@@ -25,7 +26,7 @@ import (
 func (e *Environment) OnBeforeStart(ctx context.Context) error {
 	// Always destroy and re-create the server container to ensure that synced data from the Panel is used.
 	if err := e.client.ContainerRemove(ctx, e.Id, container.RemoveOptions{RemoveVolumes: true}); err != nil {
-		if !isNotFoundError(err) {
+		if !client.IsErrNotFound(err) {
 			return errors.WrapIf(err, "environment/docker: failed to remove container during pre-boot")
 		}
 	}
@@ -163,6 +164,7 @@ func (e *Environment) Stop(ctx context.Context) error {
 		default:
 			log.Info("Unrecognised signal requested, defaulting to SIGKILL")
 		}
+
 		return e.SignalContainer(ctx, signal)
 	}
 
@@ -294,10 +296,9 @@ func (e *Environment) SignalContainer(ctx context.Context, signal string) error 
 
 	// We set it to stopping than offline to prevent crash detection from being triggered.
 	e.SetState(environment.ProcessStoppingState)
-	if err := e.client.ContainerKill(ctx, e.Id, signal); err != nil && !isNotFoundError(err) {
+	if err := e.client.ContainerKill(ctx, e.Id, signal); err != nil && !client.IsErrNotFound(err) {
 		return errors.WithStack(err)
 	}
-	e.SetState(environment.ProcessOfflineState)
 
 	return nil
 }
@@ -309,6 +310,7 @@ func (e *Environment) Terminate(ctx context.Context, signal string) error {
 	if err := e.SignalContainer(ctx, signal); err != nil {
 		return errors.WithStack(err)
 	}
+
 	// We expect Terminate to instantly kill the container
 	// so go ahead and mark it as dead and clean up
 	e.SetState(environment.ProcessOfflineState)

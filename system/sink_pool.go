@@ -69,13 +69,11 @@ func (p *SinkPool) Off(c chan []byte) {
 func (p *SinkPool) Destroy() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	for _, c := range p.sinks {
 		if c != nil {
 			close(c)
 		}
 	}
-
 	p.sinks = nil
 }
 
@@ -98,6 +96,7 @@ func (p *SinkPool) Destroy() {
 func (p *SinkPool) Push(data []byte) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+
 	var wg sync.WaitGroup
 	wg.Add(len(p.sinks))
 	for _, c := range p.sinks {

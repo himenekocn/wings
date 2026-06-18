@@ -396,7 +396,7 @@ func initConfig() {
 	if !filepath.IsAbs(configPath) {
 		d, err := filepath.Abs(configPath)
 		if err != nil {
-			log2.Fatalf("cmd/root: 无法确定CONFIG目录: %s", err)
+			log2.Fatalf("cmd/root: 无法获取配置文件的路径: %s", err)
 		}
 		configPath = d
 	}

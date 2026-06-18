@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: Copyright (c) 2024 Matthew Penner
 
+//go:build unix
+
 package ufs
 
 import (
@@ -146,6 +148,7 @@ const (
 	ModePerm = iofs.ModePerm
 )
 
+// Re-using the same names as Go's official `unix` and `os` package do.
 const (
 	// O_RDONLY opens the file read-only.
 	O_RDONLY = unix.O_RDONLY
