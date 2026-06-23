@@ -71,6 +71,21 @@ func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
 		s.powerLock.Release()
 	}
 
+	// Create a time-limited context for the power action execution to prevent
+	// the power lock from being held indefinitely if any underlying operation
+	// (such as a Docker API call) hangs.
+	var actionTimeout time.Duration
+	switch action {
+	case PowerActionStart:
+		actionTimeout = 5 * time.Minute
+	case PowerActionStop, PowerActionRestart:
+		actionTimeout = 12 * time.Minute
+	case PowerActionTerminate:
+		actionTimeout = 1 * time.Minute
+	}
+	actxCtx, actxCancel := context.WithTimeout(s.ctx, actionTimeout)
+	defer actxCancel()
+
 	var wait int
 	if len(waitSeconds) > 0 && waitSeconds[0] > 0 {
 		wait = waitSeconds[0]
@@ -131,13 +146,13 @@ func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
 			return err
 		}
 
-		return s.Environment.Start(s.Context())
+		return s.Environment.Start(actxCtx)
 	case PowerActionStop:
 		fallthrough
 	case PowerActionRestart:
 		// We're specifically waiting for the process to be stopped here, otherwise the lock is
 		// released too soon, and you can rack up all sorts of issues.
-		if err := s.Environment.WaitForStop(s.Context(), time.Minute*10, true); err != nil {
+		if err := s.Environment.WaitForStop(actxCtx, time.Minute*10, true); err != nil {
 			// Even timeout errors should be bubbled back up the stack. If the process didn't stop
 			// nicely, but the terminate argument was passed then the server is stopped without an
 			// error being returned.
@@ -158,9 +173,9 @@ func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
 			return err
 		}
 
-		return s.Environment.Start(s.Context())
+		return s.Environment.Start(actxCtx)
 	case PowerActionTerminate:
-		return s.Environment.Terminate(s.Context(), "SIGKILL")
+		return s.Environment.Terminate(actxCtx, "SIGKILL")
 	}
 
 	return errors.New("attempting to handle unknown power action")
