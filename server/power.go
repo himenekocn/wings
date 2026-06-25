@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"emperror.dev/errors"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
+	"github.com/pterodactyl/wings/remote"
 )
 
 type PowerAction string
@@ -142,7 +144,7 @@ func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
 		}
 
 		// Run the pre-boot logic for the server before processing the environment start.
-		if err := s.onBeforeStart(); err != nil {
+		if err := s.onBeforeStart(actxCtx); err != nil {
 			return err
 		}
 
@@ -169,7 +171,7 @@ func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
 		}
 
 		// Now actually try to start the process by executing the normal pre-boot logic.
-		if err := s.onBeforeStart(); err != nil {
+		if err := s.onBeforeStart(actxCtx); err != nil {
 			return err
 		}
 
@@ -183,11 +185,23 @@ func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
 
 // Execute a few functions before actually calling the environment start commands. This ensures
 // that everything is ready to go for environment booting, and that the server can even be started.
-func (s *Server) onBeforeStart() error {
+func (s *Server) onBeforeStart(ctx context.Context) error {
 	s.Log().Info("syncing server configuration with panel")
-	if err := s.Sync(); err != nil {
+	// Use the passed context for the Panel API call instead of the unbounded s.Context(),
+	// so that if the Panel is unresponsive the power lock is not held indefinitely.
+	cfg, err := s.client.GetServerConfiguration(ctx, s.ID())
+	if err != nil {
+		if rerr := remote.AsRequestError(err); rerr != nil && rerr.StatusCode() == http.StatusNotFound {
+			return &serverDoesNotExist{}
+		}
 		return errors.WithMessage(err, "unable to sync server data from Panel instance")
 	}
+	if err := s.SyncWithConfiguration(cfg); err != nil {
+		return errors.WithMessage(err, "unable to sync server configuration from Panel instance")
+	}
+
+	// Update the disk space limits for the server.
+	s.fs.SetDiskLimit(s.DiskSpace())
 
 	// Disallow start & restart if the server is suspended. Do this check after performing a sync
 	// action with the Panel to ensure that we have the most up-to-date information for that server.
